@@ -42,21 +42,25 @@ namespace TradingViewWatchlistGenerator
     {
         public OkexSimpleProduct[] data { get; set; }
     }
-    class OkexSimpleProduct {
+    class OkexSimpleProduct
+    {
         public string coinName { get; set; }
         public string ctValCcy { get; set; }
         public string settleCcy { get; set; }
     }
-    
+
     class Program
     {
 
-        private static HttpClient _httpClient = new HttpClient();
+        private static HttpClient _httpClient;
 
         static async Task Main(string[] args)
         {
+            _httpClient = new HttpClient();
+            _httpClient.Timeout = TimeSpan.FromMinutes(2);
+
             var binanceUsdtFuturePairs = (await GetMarketPairs("https://sandwichfinance.blob.core.windows.net/files/binancefuturesf_usdt_perpetual_futures.txt")).ToHashSet();
-            
+
             var binanceUsdtPairs = (await GetMarketPairs("https://sandwichfinance.blob.core.windows.net/files/binance_usdt_markets.txt")).ToHashSet();
             var binanceBtcPairs = (await GetMarketPairs("https://sandwichfinance.blob.core.windows.net/files/binance_btc_markets.txt")).ToHashSet();
 
@@ -66,20 +70,30 @@ namespace TradingViewWatchlistGenerator
             var poloniexUsdtPairs = (await GetMarketPairs("https://sandwichfinance.blob.core.windows.net/files/poloniex_usdt_markets.txt")).ToHashSet();
             var ftxUsdtPairs = (await GetMarketPairs("https://sandwichfinance.blob.core.windows.net/files/ftx_spot_markets.txt")).Where(x => x.IsUSD()).ToHashSet();
 
-            var okexUsdtFuturesString = await _httpClient.GetStringAsync(
-                    "https://www.okx.com/priapi/v5/public/simpleProduct?t=1643581526479&instType=SWAP");
+            var okexUsdtFuturesString = await _httpClient.GetStringAsync("https://www.okx.com/priapi/v5/public/simpleProduct?t=1643581526479&instType=SWAP");
             var okexUsdtFutures = JsonSerializer.Deserialize<OkexRoot>(okexUsdtFuturesString)
                 .data
                 .Where(x => x.settleCcy == "USDT")
                 .Select(x => new ExchangePair()
                 {
                     Exchange = "OKEX",
-                    Pair = x.ctValCcy+x.settleCcy
+                    Pair = x.ctValCcy + x.settleCcy + "PERP"
                 });
 
+            //https://api2.bybit.com/v3/private/instrument/dynamic-symbol?filter=all
+            var bybitUsdtFuturesString = await File.ReadAllTextAsync("static-files/bybit-dynamic-symbol.json");
+            var bybitUsdtFutures = JsonSerializer.Deserialize<ByBitRootObject>(bybitUsdtFuturesString)
+                .result
+                .LinearPerpetual
+                .Select(x => new ExchangePair()
+                {
+                    Exchange = "BYBIT",
+                    Pair = x.symbolName
+                });
 
             var allFuturesPairs = binanceUsdtFuturePairs
                 .Concat(okexUsdtFutures)
+                .Concat(bybitUsdtFutures)
                 .OrderByDescending(x => x.GetCleanPairName());
 
             var allUsdtPairs = binanceUsdtPairs
@@ -99,22 +113,24 @@ namespace TradingViewWatchlistGenerator
                 .Where(x => !binanceUsdtFuturePairs.Select(y => y.GetCleanPairName()).Contains(x.GetCleanPairName()));
 
             var binanceBtcSpotOnly = binanceBtcPairs
-                    .Where(x => !binanceUsdtPairs.Select(y => y.GetQuoteCurrency()).Contains(x.GetQuoteCurrency()))
-                    .ToList();
-            
+                .Where(x => !binanceUsdtPairs.Select(y => y.GetQuoteCurrency()).Contains(x.GetQuoteCurrency()))
+                .ToList();
+
             //
 
             var binanceFuturesPairs = new List<ExchangePair>();
             var okexFuturesPairs = new List<ExchangePair>();
-            
+            var bybitFuturesPairs = new List<ExchangePair>();
+
             foreach (var pair in futuresGroups)
             {
                 var exchanges = pair.Select(x => x.Exchange);
 
                 if (exchanges.Contains("BINANCE")) binanceFuturesPairs.Add(pair.First(x => x.Exchange.Contains("BINANCE")));
-                else if (exchanges.Contains("OKEX")) okexFuturesPairs.Add(pair.First(x => x.Exchange.Contains("OKEX"))); 
+                else if (exchanges.Contains("OKEX")) okexFuturesPairs.Add(pair.First(x => x.Exchange.Contains("OKEX")));
+                else if (exchanges.Contains("BYBIT")) bybitFuturesPairs.Add(pair.First(x => x.Exchange.Contains("BYBIT")));
             }
-            
+
             // 
 
             var binancePairs = new List<ExchangePair>();
@@ -138,8 +154,10 @@ namespace TradingViewWatchlistGenerator
 
             await File.WriteAllLinesAsync($"{nameof(binanceUsdtFuturePairs)}.txt", binanceUsdtFuturePairs.Select(x => x.ToString()));
             await File.WriteAllLinesAsync($"{nameof(okexFuturesPairs)}.txt", okexFuturesPairs.Select(x => x.ToString()));
-            
+            await File.WriteAllLinesAsync($"{nameof(bybitFuturesPairs)}.txt", bybitFuturesPairs.Select(x => x.ToString()));
+
             await File.WriteAllLinesAsync($"{nameof(binanceBtcSpotOnly)}.txt", binanceBtcSpotOnly.Select(x => x.ToString()));
+            await File.WriteAllLinesAsync($"{nameof(binanceUsdtSpotOnly)}.txt", binanceUsdtSpotOnly.Select(x => x.ToString()));
 
             await File.WriteAllLinesAsync($"{nameof(binancePairs)}.txt", binancePairs.Select(x => x.ToString()));
             await File.WriteAllLinesAsync($"{nameof(ftxPairs)}.txt", ftxPairs.Select(x => x.ToString()));
@@ -147,9 +165,6 @@ namespace TradingViewWatchlistGenerator
             await File.WriteAllLinesAsync($"{nameof(huobiPairs)}.txt", huobiPairs.Select(x => x.ToString()));
             await File.WriteAllLinesAsync($"{nameof(bitfinexPairs)}.txt", bitfinexPairs.Select(x => x.ToString()));
             await File.WriteAllLinesAsync($"{nameof(poloniexPairs)}.txt", poloniexPairs.Select(x => x.ToString()));
-            await File.WriteAllLinesAsync($"{nameof(binanceUsdtSpotOnly)}.txt", binanceUsdtSpotOnly.Select(x => x.ToString()));
-
-
         }
 
         private static async Task<IEnumerable<ExchangePair>> GetMarketPairs(string marketUrl)
