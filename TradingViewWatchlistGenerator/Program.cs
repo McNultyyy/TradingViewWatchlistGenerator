@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 
 namespace TradingViewWatchlistGenerator
@@ -36,6 +38,16 @@ namespace TradingViewWatchlistGenerator
         }
     }
 
+    class OkexRoot
+    {
+        public OkexSimpleProduct[] data { get; set; }
+    }
+    class OkexSimpleProduct {
+        public string coinName { get; set; }
+        public string ctValCcy { get; set; }
+        public string settleCcy { get; set; }
+    }
+    
     class Program
     {
 
@@ -44,6 +56,7 @@ namespace TradingViewWatchlistGenerator
         static async Task Main(string[] args)
         {
             var binanceUsdtFuturePairs = (await GetMarketPairs("https://sandwichfinance.blob.core.windows.net/files/binancefuturesf_usdt_perpetual_futures.txt")).ToHashSet();
+            
             var binanceUsdtPairs = (await GetMarketPairs("https://sandwichfinance.blob.core.windows.net/files/binance_usdt_markets.txt")).ToHashSet();
             var binanceBtcPairs = (await GetMarketPairs("https://sandwichfinance.blob.core.windows.net/files/binance_btc_markets.txt")).ToHashSet();
 
@@ -52,6 +65,22 @@ namespace TradingViewWatchlistGenerator
             var bitfinexUsdtPairs = (await GetMarketPairs("https://sandwichfinance.blob.core.windows.net/files/bitfinex_usd_markets.txt")).ToHashSet();
             var poloniexUsdtPairs = (await GetMarketPairs("https://sandwichfinance.blob.core.windows.net/files/poloniex_usdt_markets.txt")).ToHashSet();
             var ftxUsdtPairs = (await GetMarketPairs("https://sandwichfinance.blob.core.windows.net/files/ftx_spot_markets.txt")).Where(x => x.IsUSD()).ToHashSet();
+
+            var okexUsdtFuturesString = await _httpClient.GetStringAsync(
+                    "https://www.okx.com/priapi/v5/public/simpleProduct?t=1643581526479&instType=SWAP");
+            var okexUsdtFutures = JsonSerializer.Deserialize<OkexRoot>(okexUsdtFuturesString)
+                .data
+                .Where(x => x.settleCcy == "USDT")
+                .Select(x => new ExchangePair()
+                {
+                    Exchange = "OKEX",
+                    Pair = x.ctValCcy+x.settleCcy
+                });
+
+
+            var allFuturesPairs = binanceUsdtFuturePairs
+                .Concat(okexUsdtFutures)
+                .OrderByDescending(x => x.GetCleanPairName());
 
             var allUsdtPairs = binanceUsdtPairs
                 .Concat(kucoinUsdtPairs)
@@ -62,8 +91,8 @@ namespace TradingViewWatchlistGenerator
                 .FilterLeveragedTokens()
                 .OrderBy(x => x.GetCleanPairName());
 
-            var groups = allUsdtPairs.GroupBy(x => x.GetCleanPairName());
-
+            var futuresGroups = allFuturesPairs.GroupBy(x => x.GetCleanPairName());
+            var spotGroups = allUsdtPairs.GroupBy(x => x.GetCleanPairName());
 
             var binanceUsdtSpotOnly = binanceUsdtPairs
                 .FilterLeveragedTokens()
@@ -72,6 +101,20 @@ namespace TradingViewWatchlistGenerator
             var binanceBtcSpotOnly = binanceBtcPairs
                     .Where(x => !binanceUsdtPairs.Select(y => y.GetQuoteCurrency()).Contains(x.GetQuoteCurrency()))
                     .ToList();
+            
+            //
+
+            var binanceFuturesPairs = new List<ExchangePair>();
+            var okexFuturesPairs = new List<ExchangePair>();
+            
+            foreach (var pair in futuresGroups)
+            {
+                var exchanges = pair.Select(x => x.Exchange);
+
+                if (exchanges.Contains("BINANCE")) binanceFuturesPairs.Add(pair.First(x => x.Exchange.Contains("BINANCE")));
+                else if (exchanges.Contains("OKEX")) okexFuturesPairs.Add(pair.First(x => x.Exchange.Contains("OKEX"))); 
+            }
+            
             // 
 
             var binancePairs = new List<ExchangePair>();
@@ -81,7 +124,7 @@ namespace TradingViewWatchlistGenerator
             var poloniexPairs = new List<ExchangePair>();
             var ftxPairs = new List<ExchangePair>();
 
-            foreach (var pair in groups)
+            foreach (var pair in spotGroups)
             {
                 var exchanges = pair.Select(x => x.Exchange);
 
@@ -94,6 +137,7 @@ namespace TradingViewWatchlistGenerator
             }
 
             await File.WriteAllLinesAsync($"{nameof(binanceUsdtFuturePairs)}.txt", binanceUsdtFuturePairs.Select(x => x.ToString()));
+            await File.WriteAllLinesAsync($"{nameof(okexFuturesPairs)}.txt", okexFuturesPairs.Select(x => x.ToString()));
             
             await File.WriteAllLinesAsync($"{nameof(binanceBtcSpotOnly)}.txt", binanceBtcSpotOnly.Select(x => x.ToString()));
 
