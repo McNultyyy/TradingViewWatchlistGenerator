@@ -127,9 +127,13 @@ namespace TradingViewWatchlistGenerator
                 var exchanges = pair.Select(x => x.Exchange);
 
                 if (exchanges.Contains("BINANCE")) binanceFuturesPairs.Add(pair.First(x => x.Exchange.Contains("BINANCE")));
-                else if (exchanges.Contains("OKEX")) okexFuturesPairs.Add(pair.First(x => x.Exchange.Contains("OKEX")));
                 else if (exchanges.Contains("BYBIT")) bybitFuturesPairs.Add(pair.First(x => x.Exchange.Contains("BYBIT")));
+                else if (exchanges.Contains("OKEX")) okexFuturesPairs.Add(pair.First(x => x.Exchange.Contains("OKEX")));
             }
+
+            var usdtFuturesPairs = binanceFuturesPairs
+                .Concat(okexFuturesPairs)
+                .Concat(bybitFuturesPairs);
 
             // 
 
@@ -151,6 +155,8 @@ namespace TradingViewWatchlistGenerator
                 else if (exchanges.Contains("BITFINEX")) bitfinexPairs.Add(pair.First(x => x.Exchange.Contains("BITFINEX")));
                 else poloniexPairs.Add(pair.First());
             }
+
+            await File.WriteAllLinesAsync($"{nameof(usdtFuturesPairs)}.txt", usdtFuturesPairs.Select(x => x.ToString()));
 
             await File.WriteAllLinesAsync($"{nameof(binanceUsdtFuturePairs)}.txt", binanceUsdtFuturePairs.Select(x => x.ToString()));
             await File.WriteAllLinesAsync($"{nameof(okexFuturesPairs)}.txt", okexFuturesPairs.Select(x => x.ToString()));
